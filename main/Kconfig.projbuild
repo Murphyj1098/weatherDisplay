@@ -1,0 +1,19 @@
+menu "Wi-Fi Configuration"
+
+    config ESP_WIFI_SSID
+        string "Wi-Fi SSID"
+        help
+            SSID (network name) to connect to.
+
+    config ESP_WIFI_PASS
+        string "Wi-Fi Password"
+        help
+            Wi-Fi password to use for network.
+
+    config ESP_MAXIMUM_RETRY
+        int "Maximum retry"
+        default 5
+        help
+            Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
+
+endmenu
