@@ -17,3 +17,12 @@ menu "Wi-Fi Configuration"
             Set the Maximum retry to avoid station reconnecting to the AP unlimited when the AP is really inexistent.
 
 endmenu
+
+menu "Weather API"
+
+    config ESP_WEATHER_KEY
+        string "API Key"
+        help
+            API Key for remote weather database
+
+endmenu

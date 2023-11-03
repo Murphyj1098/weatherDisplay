@@ -4,6 +4,8 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "freertos/event_groups.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
@@ -11,12 +13,26 @@
 #define WIFI_PASS CONFIG_ESP_WIFI_PASS
 #define WIFI_RETRY CONFIG_ESP_MAXIMUM_RETRY
 
+#define WEATHER_API_KEY CONFIG_ESP_WEATHER_KEY
+#define WEATHER_API_URL "httpbin.org"
+
 // Event group for communucating when Wi-Fi is connected
 static EventGroupHandle_t wifiEventGroup;
 #define WIFI_CONN_SUCC BIT0
 #define WIFI_CONN_FAIL BIT1
 
 static int connRetries = 0;
+
+static const char *REQUEST =
+    "GET "
+    "/"
+    " HTTP/1.0\r\n"
+    "Host: " WEATHER_API_URL
+    ":"
+    "80"
+    "\r\n"
+    "User-Agent: esp-idf/1.0 esp32\r\n"
+    "\r\n";
 
 static void wifiEventHandler(void *arg, esp_event_base_t event_base, int32_t event_id,
                              void *event_data)
@@ -124,6 +140,85 @@ void connectWIFI(void)
   }
 }
 
+void sendHTTPReq(void)
+{
+  const struct addrinfo hints = {
+      .ai_family = AF_INET,
+      .ai_socktype = SOCK_STREAM,
+  };
+  struct addrinfo *res;
+  struct in_addr *addr;
+  int s, r;
+  char recv_buf[64];
+
+  // Get address struct setup (including DNS lookup)
+  int err = getaddrinfo(WEATHER_API_URL, "80", &hints, &res);
+
+  if (err != 0 || res == NULL) {
+    ESP_LOGE("HTTP", "DNS lookup failed err=%d res=%p", err, res);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    return;
+  }
+
+  addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+  ESP_LOGI("HTTP", "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+  // Allocate a socket to ousrself
+  s = socket(res->ai_family, res->ai_socktype, 0);
+  if (s < 0) {
+    ESP_LOGE("HTTP", "Socket allocation failed");
+    freeaddrinfo(res);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    return;
+  }
+  ESP_LOGI("HTTP", "Socket allocated");
+
+  if (connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+    ESP_LOGE("HTTP", "Socket failed to connect");
+    close(s);
+    freeaddrinfo(res);
+    vTaskDelay(4000 / portTICK_PERIOD_MS);
+    return;
+  }
+
+  ESP_LOGI("HTTP", "Socket connected");
+  freeaddrinfo(res);
+
+  // Write HTTP GET request packet
+  if (write(s, REQUEST, strlen(REQUEST)) < 0) {
+    ESP_LOGE("HTTP", "Socket sending failure");
+    close(s);
+    vTaskDelay(4000 / portTICK_PERIOD_MS);
+    return;
+  }
+  ESP_LOGI("HTTP", "Socket sending success");
+
+  // Await response
+  struct timeval receiving_timeout;
+  receiving_timeout.tv_sec = 5;
+  receiving_timeout.tv_usec = 0;
+  if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout, sizeof(receiving_timeout)) < 0) {
+    ESP_LOGE("HTTP", "Failed to set a timeout for socket receiving");
+    close(s);
+    vTaskDelay(4000 / portTICK_PERIOD_MS);
+    return;
+  }
+  ESP_LOGI("HTTP", "Successfully set socket timeout");
+
+  // Print response
+  do {
+    bzero(recv_buf, sizeof(recv_buf));
+    r = read(s, recv_buf, sizeof(recv_buf) - 1);
+    for (int i = 0; i < r; i++) {
+      putchar(recv_buf[i]);
+    }
+  } while (r > 0);
+
+  ESP_LOGI("HTTP", "... done reading from socket. Last read return=%d errno=%d.", r, errno);
+  close(s);
+  vTaskDelay(4000 / portTICK_PERIOD_MS);
+}
+
 void app_main(void)
 {
   // Initialize NVS (Store Wi-Fi creds)
@@ -135,4 +230,5 @@ void app_main(void)
   ESP_ERROR_CHECK(ret);
 
   connectWIFI();
+  sendHTTPReq();
 }
